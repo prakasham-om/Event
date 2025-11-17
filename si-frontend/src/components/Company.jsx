@@ -8,16 +8,22 @@ export default function CompanyForm() {
   const [events, setEvents] = useState([]);
 
   const handleSubmit = async () => {
+    if (!companyUrl) {
+      alert("Please enter a company URL");
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await axios.post("https://event-1-cvel.onrender.com/api/events/process", {
-        companyName,
-        companyUrl
-      });
+      const res = await axios.post(
+        "https://event-1-cvel.onrender.com/api/events/process",
+        { companyName, companyUrl }
+      );
 
+      // Backend should return data in res.data.data
       setEvents(res.data.data || []);
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching events:", err.response || err.message);
       setEvents([]);
     }
     setLoading(false);
@@ -27,21 +33,21 @@ export default function CompanyForm() {
     <div className="bg-white p-6 rounded-xl shadow-xl max-w-xl mx-auto">
       <h2 className="text-xl font-bold mb-4">AI Event Finder</h2>
 
-      <input 
+      <input
         className="border p-2 w-full mb-3"
         placeholder="Company Name"
         value={companyName}
         onChange={(e) => setCompanyName(e.target.value)}
       />
 
-      <input 
+      <input
         className="border p-2 w-full mb-3"
         placeholder="Company Website URL"
         value={companyUrl}
         onChange={(e) => setCompanyUrl(e.target.value)}
       />
 
-      <button 
+      <button
         className="bg-blue-600 text-white px-4 py-2 rounded"
         onClick={handleSubmit}
       >
@@ -53,11 +59,25 @@ export default function CompanyForm() {
         <div className="mt-4">
           {events.map((event, idx) => (
             <div key={idx} className="mb-3 p-3 border rounded bg-gray-100">
-              <p><strong>Title:</strong> {event.eventTitle}</p>
+              <p><strong>Title:</strong> {event.title}</p>
               <p><strong>Date:</strong> {event.date || "N/A"}</p>
               <p><strong>Location:</strong> {event.location || "N/A"}</p>
-              <p><strong>Event URL:</strong> <a href={event.eventURL} target="_blank">{event.eventURL}</a></p>
-              <p><strong>3rd Party URL:</strong> <a href={event.thirdPartyURL} target="_blank">{event.thirdPartyURL}</a></p>
+              <p>
+                <strong>Event URL:</strong>{" "}
+                <a href={event.link} target="_blank" rel="noopener noreferrer">
+                  {event.link}
+                </a>
+              </p>
+              <p>
+                <strong>3rd Party URL:</strong>{" "}
+                <a
+                  href={event.thirdPartyURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {event.thirdPartyURL}
+                </a>
+              </p>
               <p><strong>Source:</strong> {event.source}</p>
               <p><strong>Booth Number:</strong> {event.boothNumber || "N/A"}</p>
             </div>
