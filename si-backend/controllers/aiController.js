@@ -6,8 +6,8 @@ exports.processCompany = async (req, res) => {
   try {
     const { companyName, companyUrl } = req.body;
 
-    if (!companyUrl) {
-      return res.status(400).json({ success: false, error: "companyUrl is required" });
+    if (!companyName) {
+      return res.status(400).json({ success: false, error: "companyName is required" });
     }
 
     // 🔍 Fetch events using company URL (your requirement)
