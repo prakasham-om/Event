@@ -10,7 +10,7 @@ export default function CompanyForm() {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const res = await axios.post("http://localhost:5000/api/events/process", {
+      const res = await axios.post("https://event-1-cvel.onrender.com/events/process", {
         companyName,
         companyUrl
       });
