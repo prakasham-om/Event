@@ -36,6 +36,6 @@ exports.processCompany = async (req, res) => {
 
   } catch (err) {
     console.error("Error processing company:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err });
   }
 };
