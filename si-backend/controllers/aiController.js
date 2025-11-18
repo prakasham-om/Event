@@ -1,6 +1,6 @@
 // controllers/aiController.js
 const { appendRow } = require("../services/googleSheet");
-const { fetchCompanyEventUrls } = require("../services/companyEvent");
+const { fetchCompanyEventInfo } = require("../services/companyEvent");
 
 exports.processCompany = async (req, res) => {
   try {
@@ -10,33 +10,44 @@ exports.processCompany = async (req, res) => {
       return res.status(400).json({ success: false, error: "companyName is required" });
     }
 
-    // Fetch events from your scraper
-    const scrapedEvents = await fetchCompanyEventUrls(companyUrl);
+    // 🔍 Fetch events using company URL
+    const scrapedData = await fetchCompanyEventInfo(companyName, companyUrl);
+    const events = scrapedData.events || [];
 
-    if (!Array.isArray(scrapedEvents) || scrapedEvents.length === 0) {
-      return res.status(400).json({ success: false, error: "No events found" });
+    // If no events found, still write one row with empty event details
+    if (events.length === 0) {
+      const row = [
+        companyName || "",
+        "", // eventTitle
+        "", // date
+        "", // location
+        "", // eventURL
+        "", // thirdPartyURL
+        "", // source
+        ""  // boothNumber
+      ];
+      await appendRow(row);
+      console.log(`Saved empty event row for ${companyName} to Google Sheets.`);
+      return res.json({ success: true, message: "No events found, but row added to Google Sheets." });
     }
 
-    for (const event of scrapedEvents) {
+    // Write all events
+    for (const event of events) {
       const row = [
-        companyName || "",              // Company Name
-        event.eventTitle || "",         // Event/News Title
-        event.date || "",               // Date
-        event.location || "",           // Location
-        event.eventURL || "",           // Event URL
-        event.thirdPartyURL || "",      // 3rd Party URL
-        event.source || "Google Search",// Source
-        event.boothNumber || ""         // Booth Number
+        companyName || "",
+        event.eventTitle || "",
+        event.date || "",
+        event.location || "",
+        event.eventURL || "",
+        event.thirdPartyURL || event.eventURL || "",
+        event.source || "LLM",
+        event.boothNumber || ""
       ];
-
       await appendRow(row);
     }
 
-    console.log(`Saved ${scrapedEvents.length} events for ${companyName} to Google Sheets.`);
-    res.json({
-      success: true,
-      message: `Saved ${scrapedEvents.length} events to Google Sheets!`
-    });
+    console.log(`Saved ${events.length} events for ${companyName} to Google Sheets.`);
+    res.json({ success: true, message: `Saved ${events.length} events to Google Sheets!` });
 
   } catch (err) {
     console.error("Error processing company:", err);
