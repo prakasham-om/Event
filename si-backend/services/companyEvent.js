@@ -1,119 +1,155 @@
-// services/googleSearchEvents.js
 const axios = require("axios");
+const cheerio = require("cheerio");
+const Groq = require("groq-sdk");
+const dotenv = require("dotenv");
+dotenv.config();
 
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const SEARCH_ENGINE_ID = process.env.SEARCH_ENGINE_ID;
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Extract domain (clean)
-const extractDomain = (companyUrl) => {
+// Extract meta info from LLM text
+const extractMeta = (text) => {
+  const meta = { title: "", description: "", h1: "", positioning: "" };
+  const titleMatch = text.match(/- Meta Title:\s*(.+)/i);
+  const descMatch = text.match(/- Meta Description:\s*(.+)/i);
+  const h1Match = text.match(/- H1 Tag:\s*(.+)/i);
+  const posMatch = text.match(/- Category\/Positioning phrase:\s*(.+)/i);
+
+  if (titleMatch) meta.title = titleMatch[1].trim();
+  if (descMatch) meta.description = descMatch[1].trim();
+  if (h1Match) meta.h1 = h1Match[1].trim();
+  if (posMatch) meta.positioning = posMatch[1].trim();
+
+  return meta;
+};
+
+// Fetch news from GNews API
+const fetchGNews = async (companyName) => {
   try {
-    return new URL(companyUrl).hostname.replace("www.", "");
-  } catch {
-    return companyUrl;
-  }
-};
+    const apiKey = process.env.GNEWS_API_KEY;
+    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(
+      `"${companyName}"`
+    )}&lang=en&max=10&token=${apiKey}&from=${new Date(
+      new Date().setMonth(new Date().getMonth() - 6)
+    ).toISOString()}`;
 
-// Better date extraction
-const extractEventDate = (text) => {
-  if (!text) return null;
+    const res = await axios.get(url);
+    if (!res.data.articles) return [];
 
-  const months = [
-    "jan", "feb", "mar", "apr", "may", "jun",
-    "jul", "aug", "sep", "oct", "nov", "dec"
-  ];
-
-  const patterns = [
-    /\b(20\d{2})\b/i,   // year
-    /\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+20\d{2}\b/i,
-    new RegExp(`(${months.join("|")})\\s*\\d{1,2},?\\s*(20\\d{2})`, 'i'),
-    new RegExp(`(${months.join("|")})\\s*(20\\d{2})`, 'i')
-  ];
-
-  for (let p of patterns) {
-    const m = text.match(p);
-    if (m) return m[0];
-  }
-
-  return null;
-};
-
-const parseToDate = (rawDate) => {
-  if (!rawDate) return null;
-  const d = new Date(rawDate);
-  return isNaN(d) ? null : d;
-};
-
-const isUpcoming = (eventDate) => {
-  if (!eventDate) return true;
-  return eventDate >= new Date();
-};
-
-const fetchCompanyEventUrls = async (companyUrl) => {
-  try {
-    const domain = extractDomain(companyUrl);
-
-    // IMPORTANT FIX: force search only inside company website
-    const query = `site:${domain} ("event" OR "conference" OR "expo" OR "seminar" OR "webinar" OR "展示会" OR "出展")`;
-
-    console.log("🔍 Query Used:", query);
-
-    const response = await axios.get(
-      "https://www.googleapis.com/customsearch/v1",
-      {
-        params: {
-          key: GOOGLE_API_KEY,
-          cx: SEARCH_ENGINE_ID,
-          q: query,
-          num: 10
-        }
-      }
-    );
-
-    const items = response.data.items || [];
-    if (!items.length) {
-      console.log("⚠ No results returned.");
-      return [];
-    }
-
-    const unique = new Set();
-    const results = [];
-
-    for (const item of items) {
-      if (!item.link) continue;
-
-      // Avoid repeated URLs
-      if (unique.has(item.link)) continue;
-      unique.add(item.link);
-
-      const fullText = `${item.title} ${item.snippet}`;
-      const rawDate = extractEventDate(fullText);
-      const parsedDate = parseToDate(rawDate);
-
-      results.push({
-        eventTitle: item.title || "",
-        eventURL: item.link || "",
-        thirdPartyURL: item.link || "",
-        source: item.displayLink || domain,
-        rawDate: rawDate || "",
-        date: parsedDate ? parsedDate.toISOString() : "",
-        location: "",
-        boothNumber: ""
-      });
-    }
-
-    // Filter upcoming
-    const upcoming = results.filter((r) => {
-      if (!r.date) return true;
-      return isUpcoming(new Date(r.date));
-    });
-
-    console.log("🎯 Final upcoming results:", upcoming.length);
-    return upcoming;
-
+    return res.data.articles.map((item) => ({
+      eventTitle: item.title,
+      date: item.publishedAt ? item.publishedAt.split("T")[0] : "",
+      location: "",
+      eventURL: item.url,
+      thirdPartyURL: item.url,
+      source: item.source.name,
+      boothNumber: "",
+    }));
   } catch (err) {
-    console.error("💥 ERROR:", err.response?.data || err.message);
+    console.error("💥 GNews API error:", err.message);
     return [];
   }
 };
 
-module.exports = { fetchCompanyEventUrls };
+// Scrape company website for events/news
+const scrapeCompanySite = async (companyUrl) => {
+  try {
+    const res = await axios.get(companyUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+      },
+    });
+
+    const $ = cheerio.load(res.data);
+    const results = [];
+
+    // Scrape links in /news or /events sections
+    $("a").each((i, el) => {
+      const href = $(el).attr("href");
+      const text = $(el).text().trim();
+      if (href && text && (href.includes("/news") || href.includes("/events"))) {
+        let fullUrl = href.startsWith("http") ? href : `${companyUrl}${href}`;
+        results.push({
+          eventTitle: text,
+          date: "",
+          location: "",
+          eventURL: fullUrl,
+          thirdPartyURL: fullUrl,
+          source: "Company Website",
+          boothNumber: "",
+        });
+      }
+    });
+
+    return results;
+  } catch (err) {
+    console.error("💥 Company site scrape error:", err.message);
+    return [];
+  }
+};
+
+// Main function
+const fetchCompanyEventInfo = async (companyName, companyUrl) => {
+  try {
+    // Step 1: LLM for meta info
+    const prompt = `
+Check meta info for ${companyName} (${companyUrl}) website.
+Return:
+- Meta Title
+- Meta Description
+- H1 Tag
+- Category/Positioning phrase (Top ... 2026)
+Output in single-line text format.
+`;
+
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+    });
+
+    const rawText = response.choices[0].message.content.trim();
+    const meta = extractMeta(rawText);
+
+    // Step 2: Fetch GNews articles
+    const newsEvents = await fetchGNews(companyName);
+
+    // Step 3: Scrape company website
+    const siteEvents = await scrapeCompanySite(companyUrl);
+
+    // Merge all events
+    let allEvents = [...newsEvents, ...siteEvents];
+
+    // Deduplicate by URL first, then by title
+    const seenUrls = new Set();
+    const seenTitles = new Set();
+    allEvents = allEvents.filter((e) => {
+      if ((e.eventURL && seenUrls.has(e.eventURL)) || (e.eventTitle && seenTitles.has(e.eventTitle))) {
+        return false;
+      }
+      if (e.eventURL) seenUrls.add(e.eventURL);
+      if (e.eventTitle) seenTitles.add(e.eventTitle);
+      return true;
+    });
+
+    // Ensure at least one row
+    if (allEvents.length === 0) {
+      allEvents.push({
+        eventTitle: "",
+        date: "",
+        location: "",
+        eventURL: "",
+        thirdPartyURL: "",
+        source: "",
+        boothNumber: "",
+      });
+    }
+
+    return { meta, events: allEvents };
+  } catch (err) {
+    console.error("💥 ERROR:", err.message);
+    return { meta: { title: companyName }, events: [] };
+  }
+};
+
+module.exports = { fetchCompanyEventInfo };
