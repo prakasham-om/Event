@@ -10,7 +10,7 @@ exports.processCompany = async (req, res) => {
       return res.status(400).json({ success: false, error: "companyName is required" });
     }
 
-    // 🔍 Fetch events using company URL (your requirement)
+    // Fetch events from your scraper
     const scrapedEvents = await fetchCompanyEventUrls(companyUrl);
 
     if (!Array.isArray(scrapedEvents) || scrapedEvents.length === 0) {
@@ -19,23 +19,27 @@ exports.processCompany = async (req, res) => {
 
     for (const event of scrapedEvents) {
       const row = [
-        companyName || "",
-        event.title || "",
-        event.date || "",
-        event.location || "",
-        event.link || "",
-        event.thirdPartyURL || event.link || "",
-        event.source || "Google Search",
-        event.boothNumber || ""
+        companyName || "",              // Company Name
+        event.eventTitle || "",         // Event/News Title
+        event.date || "",               // Date
+        event.location || "",           // Location
+        event.eventURL || "",           // Event URL
+        event.thirdPartyURL || "",      // 3rd Party URL
+        event.source || "Google Search",// Source
+        event.boothNumber || ""         // Booth Number
       ];
+
       await appendRow(row);
     }
 
     console.log(`Saved ${scrapedEvents.length} events for ${companyName} to Google Sheets.`);
-    res.json({ success: true, message: `Saved ${scrapedEvents.length} events to Google Sheets!` });
+    res.json({
+      success: true,
+      message: `Saved ${scrapedEvents.length} events to Google Sheets!`
+    });
 
   } catch (err) {
     console.error("Error processing company:", err);
-    res.status(500).json({ success: false, error: err });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
