@@ -6,31 +6,43 @@ dotenv.config();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Extract meta info from LLM text
+/* -------------------------------------------------------
+   1️⃣  Extract Meta Info From LLM Raw Text
+------------------------------------------------------- */
 const extractMeta = (text) => {
   const meta = { title: "", description: "", h1: "", positioning: "" };
-  const titleMatch = text.match(/- Meta Title:\s*(.+)/i);
-  const descMatch = text.match(/- Meta Description:\s*(.+)/i);
-  const h1Match = text.match(/- H1 Tag:\s*(.+)/i);
-  const posMatch = text.match(/- Category\/Positioning phrase:\s*(.+)/i);
+  const patterns = {
+    title: /- Meta Title:\s*(.+)/i,
+    description: /- Meta Description:\s*(.+)/i,
+    h1: /- H1 Tag:\s*(.+)/i,
+    positioning: /- Category\/Positioning phrase:\s*(.+)/i,
+  };
 
-  if (titleMatch) meta.title = titleMatch[1].trim();
-  if (descMatch) meta.description = descMatch[1].trim();
-  if (h1Match) meta.h1 = h1Match[1].trim();
-  if (posMatch) meta.positioning = posMatch[1].trim();
+  Object.keys(patterns).forEach((key) => {
+    const match = text.match(patterns[key]);
+    if (match) meta[key] = match[1].trim();
+  });
 
   return meta;
 };
 
-// Fetch news from GNews API
-const fetchGNews = async (companyName) => {
+/* -------------------------------------------------------
+   2️⃣  GNews — STRICT COMPANY FILTERS
+------------------------------------------------------- */
+const fetchGNews = async (companyName, companyUrl) => {
   try {
     const apiKey = process.env.GNEWS_API_KEY;
+    const domain = new URL(companyUrl).hostname;
+
+    // 🎯 STRICT CORPORATE QUERY (removes gaming, celebrity noise)
+    const query = `"${companyName}" 
+      AND (company OR corporation OR inc OR ltd OR limited OR earnings OR press OR release OR announcement OR event OR acquisition OR partnership)
+      AND site:${domain}
+      -game -gaming -actor -celebrity -movie -football -music -sports -rapper`;
+
     const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(
-      `"${companyName}"`
-    )}&lang=en&max=10&token=${apiKey}&from=${new Date(
-      new Date().setMonth(new Date().getMonth() - 6)
-    ).toISOString()}`;
+      query
+    )}&lang=en&max=10&token=${apiKey}`;
 
     const res = await axios.get(url);
     if (!res.data.articles) return [];
@@ -50,7 +62,32 @@ const fetchGNews = async (companyName) => {
   }
 };
 
-// Scrape company website for events/news
+/* -------------------------------------------------------
+   3️⃣  LLM — Validate if an article truly belongs to company
+------------------------------------------------------- */
+const validateArticle = async (companyName, title) => {
+  try {
+    const prompt = `
+Does the following article belong *specifically* to the company "${companyName}"?
+Article title: "${title}"
+Answer only Yes or No.
+`;
+
+    const r = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+    });
+
+    return r.choices[0].message.content.trim().toLowerCase().includes("yes");
+  } catch {
+    return false;
+  }
+};
+
+/* -------------------------------------------------------
+   4️⃣  Scrape Company Website For Events/News Links
+------------------------------------------------------- */
 const scrapeCompanySite = async (companyUrl) => {
   try {
     const res = await axios.get(companyUrl, {
@@ -63,12 +100,15 @@ const scrapeCompanySite = async (companyUrl) => {
     const $ = cheerio.load(res.data);
     const results = [];
 
-    // Scrape links in /news or /events sections
     $("a").each((i, el) => {
       const href = $(el).attr("href");
       const text = $(el).text().trim();
-      if (href && text && (href.includes("/news") || href.includes("/events"))) {
+
+      if (!href || !text) return;
+
+      if (href.includes("news") || href.includes("event")) {
         let fullUrl = href.startsWith("http") ? href : `${companyUrl}${href}`;
+
         results.push({
           eventTitle: text,
           date: "",
@@ -88,18 +128,20 @@ const scrapeCompanySite = async (companyUrl) => {
   }
 };
 
-// Main function
+/* -------------------------------------------------------
+   5️⃣  MAIN FUNCTION
+------------------------------------------------------- */
 const fetchCompanyEventInfo = async (companyName, companyUrl) => {
   try {
-    // Step 1: LLM for meta info
+    /* ---------- (A) LLM Meta Info ---------- */
     const prompt = `
-Check meta info for ${companyName} (${companyUrl}) website.
+Analyze the official website of: ${companyName} (${companyUrl})
 Return:
 - Meta Title
 - Meta Description
 - H1 Tag
-- Category/Positioning phrase (Top ... 2026)
-Output in single-line text format.
+- Category/Positioning phrase
+Return clean structured lines only.
 `;
 
     const response = await groq.chat.completions.create({
@@ -111,28 +153,38 @@ Output in single-line text format.
     const rawText = response.choices[0].message.content.trim();
     const meta = extractMeta(rawText);
 
-    // Step 2: Fetch GNews articles
-    const newsEvents = await fetchGNews(companyName);
+    /* ---------- (B) GNews + domain-filtered corporate news ---------- */
+    let newsEvents = await fetchGNews(companyName, companyUrl);
 
-    // Step 3: Scrape company website
+    /* ---------- (C) Validate GNews articles using LLM ---------- */
+    const validatedNews = [];
+    for (let e of newsEvents) {
+      const valid = await validateArticle(companyName, e.eventTitle);
+      if (valid) validatedNews.push(e);
+    }
+
+    /* ---------- (D) Scrape company website ---------- */
     const siteEvents = await scrapeCompanySite(companyUrl);
 
-    // Merge all events
-    let allEvents = [...newsEvents, ...siteEvents];
+    /* ---------- (E) Merge + Deduplicate ---------- */
+    let allEvents = [...validatedNews, ...siteEvents];
 
-    // Deduplicate by URL first, then by title
     const seenUrls = new Set();
     const seenTitles = new Set();
+
     allEvents = allEvents.filter((e) => {
-      if ((e.eventURL && seenUrls.has(e.eventURL)) || (e.eventTitle && seenTitles.has(e.eventTitle))) {
+      if (
+        (e.eventURL && seenUrls.has(e.eventURL)) ||
+        (e.eventTitle && seenTitles.has(e.eventTitle))
+      )
         return false;
-      }
+
       if (e.eventURL) seenUrls.add(e.eventURL);
       if (e.eventTitle) seenTitles.add(e.eventTitle);
       return true;
     });
 
-    // Ensure at least one row
+    /* ---------- (F) At least 1 empty row (for Sheets) ---------- */
     if (allEvents.length === 0) {
       allEvents.push({
         eventTitle: "",
@@ -144,6 +196,8 @@ Output in single-line text format.
         boothNumber: "",
       });
     }
+
+    console.log(allEvents);
 
     return { meta, events: allEvents };
   } catch (err) {
