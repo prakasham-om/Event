@@ -46,8 +46,8 @@ exports.processCompany = async (req, res) => {
       await appendRow(row);
     }
 
-    console.log(`Saved ${events.length} events for ${companyName} to Google Sheets.`);
-    res.json({ success: true, message: `Saved ${events.length} events to Google Sheets!` });
+  //  console.log(`Saved ${events.length} events for ${companyName} to Google Sheets.`);
+    res.json({ success: true, message: `Saved ${events.length} events to Google Sheets!`, data: events });
 
   } catch (err) {
     console.error("Error processing company:", err);
